@@ -1,0 +1,28 @@
+{
+  "id": "buch-agent",
+  "name": "Buch-Agent",
+  "description": "Lektorat, Korrektorat und Marketing für Bücher und Texte",
+  "icon": "📚",
+  "path": "../buch-agent",
+  "entry_point": "agent.py",
+  "accepts": [".pdf", ".docx", ".txt", ".md"],
+  "actions": [
+    {
+      "id": "lektorat",
+      "description": "Inhaltliches und stilistisches Lektorat: Struktur, Aufbau, Stil, Zielgruppe"
+    },
+    {
+      "id": "korrektorat",
+      "description": "Sprachliches Korrektorat: Rechtschreibung, Grammatik, Zeichensetzung"
+    },
+    {
+      "id": "marketing",
+      "description": "Marketing-Paket: Klappentext, Social-Media-Posts, Pressemitteilung, SEO-Keywords"
+    },
+    {
+      "id": "alle",
+      "description": "Alle drei Analysen (Lektorat + Korrektorat + Marketing) nacheinander"
+    }
+  ],
+  "requires_file": true
+}
