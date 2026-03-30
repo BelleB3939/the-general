@@ -3,7 +3,14 @@
 import json
 import re
 import subprocess
+import sys
+from pathlib import Path
 from typing import Callable
+
+# Memory-Modul aus buch-agent laden (liegt eine Ebene höher)
+_BUCH_AGENT_SRC = Path(__file__).parent.parent.parent / "buch-agent" / "src"
+if str(_BUCH_AGENT_SRC) not in sys.path:
+    sys.path.insert(0, str(_BUCH_AGENT_SRC))
 
 TOOL_CALL_RE = re.compile(r"<TOOL_CALL>\s*(.*?)\s*</TOOL_CALL>", re.DOTALL)
 
@@ -16,9 +23,12 @@ Du sprichst IMMER auf Deutsch, bist präzise, freundlich und direkt.
 2. Aufgaben an die passenden Agents delegieren
 3. Neue Agents erstellen wenn Isabelle das wünscht
 4. Ergebnisse der Agents präsentieren und koordinieren
+5. Gedächtnis lesen und nutzen um personalisierte Empfehlungen zu geben
 
 ## Verfügbare Agents
 {agents_description}
+
+{memory_context}
 
 ## Tools – so rufst du sie auf
 
@@ -37,13 +47,19 @@ Du sprichst IMMER auf Deutsch, bist präzise, freundlich und direkt.
 {{"tool": "list_agents"}}
 </TOOL_CALL>
 
+### Gedächtnis-Eintrag speichern:
+<TOOL_CALL>
+{{"tool": "save_memory", "category": "<stil|projekte|muster|feedback|agents|laufend>", "entry": "<kurzer präziser Eintrag auf Deutsch>"}}
+</TOOL_CALL>
+
 ## Regeln
 - Antworte IMMER auf Deutsch
+- Nutze das Gedächtnis aktiv: erwähne relevante frühere Infos wenn passend
 - Erkläre kurz was du tust, bevor du ein Tool aufrufst
 - Wenn du einen Dateipfad brauchst und keiner angegeben wurde: frage nach
 - Das JSON in TOOL_CALL muss valide sein
 - Nach einem Tool-Aufruf bekommst du das Ergebnis und fasst es für Isabelle zusammen
-- Halte Antworten knapp – Isabelle sieht die Details direkt im Terminal
+- Speichere wichtige neue Informationen über Isabelles Projekte und Präferenzen im Gedächtnis
 """
 
 
@@ -54,11 +70,23 @@ class Conversation:
         self.creator = creator
         self.history: list = []
 
+    # ─── Memory ───────────────────────────────────────────────────────────────
+
+    def _get_memory(self):
+        try:
+            from memory import get_general_memory
+            return get_general_memory()
+        except Exception:
+            return None
+
     # ─── System Prompt ────────────────────────────────────────────────────────
 
     def _system_prompt(self) -> str:
+        memory = self._get_memory()
+        mem_ctx = memory.als_prompt() if memory else ""
         return SYSTEM_PROMPT.format(
-            agents_description=self.registry.agents_description()
+            agents_description=self.registry.agents_description(),
+            memory_context=mem_ctx,
         )
 
     # ─── Prompt Building ──────────────────────────────────────────────────────
@@ -191,10 +219,32 @@ class Conversation:
 
         elif tool == "create_agent":
             result = self.creator.create(tc)
+            # Memory: neuen Agent vermerken
+            try:
+                memory = self._get_memory()
+                if memory and result.get("success"):
+                    memory.schreibe("agents",
+                        f"Agent '{result.get('agent_id')}' erstellt: {tc.get('description', '')}"
+                    )
+            except Exception:
+                pass
             return json.dumps(result, ensure_ascii=False)
 
         elif tool == "list_agents":
             return json.dumps({"agents": self.registry.get_all()}, ensure_ascii=False)
+
+        elif tool == "save_memory":
+            # Expliziter Memory-Eintrag aus dem Chat
+            cat   = tc.get("category", "muster")
+            entry = tc.get("entry", "")
+            try:
+                memory = self._get_memory()
+                if memory and entry:
+                    memory.schreibe(cat, entry)
+                    return json.dumps({"success": True, "saved": entry})
+            except Exception as e:
+                return json.dumps({"error": str(e)})
+            return json.dumps({"success": False, "error": "Memory nicht verfügbar"})
 
         else:
             return json.dumps({"error": f"Unbekanntes Tool: {tool}"})
