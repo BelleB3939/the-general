@@ -215,6 +215,13 @@ class Conversation:
             if len(out) > 4000:
                 out = out[:4000] + "\n...[gekürzt]"
             result["output"] = out
+            # Notion: Delegation loggen
+            try:
+                from src.general_notion import log_delegation
+                snippet = out[:200] if out else ""
+                log_delegation(agent_id, action, file, result.get("success", False), snippet)
+            except Exception:
+                pass
             return json.dumps(result, ensure_ascii=False)
 
         elif tool == "create_agent":
@@ -228,10 +235,23 @@ class Conversation:
                     )
             except Exception:
                 pass
+            # Notion: Übersicht aktualisieren
+            try:
+                from src.general_notion import aktualisiere_uebersicht
+                aktualisiere_uebersicht(self.registry.get_all())
+            except Exception:
+                pass
             return json.dumps(result, ensure_ascii=False)
 
         elif tool == "list_agents":
-            return json.dumps({"agents": self.registry.get_all()}, ensure_ascii=False)
+            agents = self.registry.get_all()
+            # Notion: Übersicht aktualisieren
+            try:
+                from src.general_notion import aktualisiere_uebersicht
+                aktualisiere_uebersicht(agents)
+            except Exception:
+                pass
+            return json.dumps({"agents": agents}, ensure_ascii=False)
 
         elif tool == "save_memory":
             # Expliziter Memory-Eintrag aus dem Chat
@@ -261,16 +281,19 @@ class Conversation:
         """Verarbeitet eine Benutzernachricht (mit bis zu 3 Tool-Runden)."""
         current_user_msg = user_message
         prompt = self._build_prompt(user_message)
+        all_tool_calls: list = []
+        final_response = ""
 
         for iteration in range(3):
             response = self._call_claude(prompt, on_delta)
+            final_response = response
 
             tool_calls_raw = TOOL_CALL_RE.findall(response)
             if not tool_calls_raw:
                 # No tools – add to history and done
                 self._add_history(user_message if iteration == 0 else current_user_msg,
                                   response)
-                return
+                break
 
             # Execute tools
             tool_results_parts = []
@@ -282,6 +305,7 @@ class Conversation:
                         f'<TOOL_RESULT>{{"error": "Ungültiges JSON: {e}"}}</TOOL_RESULT>'
                     )
                     continue
+                all_tool_calls.append(tc)
                 on_tool_header(tc)
                 result_str = self._execute_tool(tc, on_tool_line)
                 tool_results_parts.append(
@@ -304,9 +328,17 @@ class Conversation:
             )
             current_user_msg = follow_up
             prompt = self._build_prompt(follow_up)
+        else:
+            # Reached iteration limit
+            on_delta("\n")
 
-        # Final answer after tool loop
-        on_delta("\n")
+        # Notion: Aktivität loggen (fire-and-forget, nie crashen)
+        try:
+            from src.general_notion import log_aktivitaet
+            clean_response = TOOL_CALL_RE.sub("", final_response).strip()
+            log_aktivitaet(user_message, all_tool_calls, clean_response[:500])
+        except Exception:
+            pass
 
     # ─── History ──────────────────────────────────────────────────────────────
 
